@@ -4,13 +4,10 @@ const dotenv = require("dotenv");
 const path = require("path");
 const rateLimit = require("express-rate-limit");
 
-// Load environment variables
 dotenv.config();
 
-// Database
 const connectDB = require("./config/db");
 
-// Routes
 const authRoutes = require("./routes/authRoutes");
 const jobRoutes = require("./routes/jobRoutes");
 const applicantRoutes = require("./routes/applicantRoutes");
@@ -29,30 +26,96 @@ connectDB();
 // CORS
 // ===============================
 
-const allowedOrigins = process.env.CLIENT_URL
-  ? process.env.CLIENT_URL.split(",").map((url) => url.trim())
-  : [];
+const clientUrl = process.env.CLIENT_URL || "";
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests without an origin
-      // (Postman, server-to-server, etc.)
-      if (!origin) {
-        return callback(null, true);
-      }
+// Parse and normalize origins (remove trailing slashes, trim whitespace)
+const parsedOrigins = clientUrl
+  .split(",")
+  .map((url) => url.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+// Default development origins
+const defaultOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:3000",
+];
 
-      return callback(
-        new Error(`CORS blocked for origin: ${origin}`)
+const allowedOrigins = Array.from(new Set([...parsedOrigins, ...defaultOrigins]));
+
+console.log("Allowed CORS origins:", allowedOrigins);
+if (!clientUrl) {
+  console.warn("Notice: CLIENT_URL environment variable is not set. Defaulting to localhost origins. Set CLIENT_URL to your Vercel frontend URL in production.");
+}
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests without Origin (e.g. mobile apps, curl, server-to-server, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    const cleanOrigin = origin.replace(/\/+$/, "");
+
+    // 1. Direct match or wildcard '*'
+    if (allowedOrigins.includes("*") || allowedOrigins.includes(cleanOrigin)) {
+      return callback(null, true);
+    }
+
+    // 2. Allow any .vercel.app domain if vercel.app or *.vercel.app is specified in allowedOrigins
+    const isVercelDomain =
+      cleanOrigin.endsWith(".vercel.app") &&
+      allowedOrigins.some(
+        (allowed) =>
+          allowed.includes("vercel.app") ||
+          allowed === "*.vercel.app" ||
+          allowed === "*"
       );
-    },
-    credentials: true,
-  })
-);
+
+    if (isVercelDomain) {
+      return callback(null, true);
+    }
+
+    // 3. Custom wildcard matching (e.g. https://*.mydomain.com)
+    const matchesWildcard = allowedOrigins.some((allowed) => {
+      if (allowed.startsWith("https://*.")) {
+        const domainSuffix = allowed.slice("https://*.".length);
+        return cleanOrigin.startsWith("https://") && cleanOrigin.endsWith(`.${domainSuffix}`);
+      }
+      if (allowed.startsWith("http://*.")) {
+        const domainSuffix = allowed.slice("http://*.".length);
+        return cleanOrigin.startsWith("http://") && cleanOrigin.endsWith(`.${domainSuffix}`);
+      }
+      return false;
+    });
+
+    if (matchesWildcard) {
+      return callback(null, true);
+    }
+
+    console.warn(`[CORS] Blocked request from origin: ${origin}`);
+    return callback(new Error("CORS blocked"));
+  },
+
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+
+  allowedHeaders: [
+    "Origin",
+    "X-Requested-With",
+    "Content-Type",
+    "Accept",
+    "Authorization",
+  ],
+
+  credentials: true,
+
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+
+// Explicitly handle preflight requests with identical options
+app.options("*", cors(corsOptions));
 
 // ===============================
 // BODY PARSERS
@@ -91,6 +154,22 @@ app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
     message: "SmartHire API is running",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "SmartHire API root is online",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -123,10 +202,12 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   console.error("Server Error:", err.message);
 
-  if (err.message && err.message.startsWith("CORS blocked")) {
+  if (err.message === "CORS blocked") {
     return res.status(403).json({
       success: false,
-      message: err.message,
+      message: "CORS blocked: Origin not allowed",
+      origin: req.headers.origin || null,
+      hint: "Make sure CLIENT_URL environment variable on Render includes your Vercel URL: " + (req.headers.origin || ""),
     });
   }
 
@@ -139,9 +220,6 @@ app.use((err, req, res, next) => {
 // ===============================
 // START SERVER
 // ===============================
-
-// IMPORTANT FOR RENDER:
-// Use Render's PORT, not a fixed port.
 
 const PORT = process.env.PORT || 5000;
 
