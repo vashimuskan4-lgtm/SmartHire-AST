@@ -1,14 +1,16 @@
-require("dotenv").config();
-
-require("express-async-errors");
-
 const express = require("express");
 const cors = require("cors");
-const rateLimit = require("express-rate-limit");
+const dotenv = require("dotenv");
 const path = require("path");
+const rateLimit = require("express-rate-limit");
 
+// Load environment variables
+dotenv.config();
+
+// Database
 const connectDB = require("./config/db");
 
+// Routes
 const authRoutes = require("./routes/authRoutes");
 const jobRoutes = require("./routes/jobRoutes");
 const applicantRoutes = require("./routes/applicantRoutes");
@@ -17,34 +19,50 @@ const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
-
 // ===============================
-// Connect to MongoDB
+// DATABASE
 // ===============================
 
 connectDB();
 
+// ===============================
+// CORS
+// ===============================
 
-// ===============================
-// Middleware
-// ===============================
+const allowedOrigins = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.split(",").map((url) => url.trim())
+  : [];
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL
-      ? process.env.CLIENT_URL.split(",")
-      : true,
+    origin: (origin, callback) => {
+      // Allow requests without an origin
+      // (Postman, server-to-server, etc.)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error(`CORS blocked for origin: ${origin}`)
+      );
+    },
     credentials: true,
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
+// ===============================
+// BODY PARSERS
+// ===============================
 
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-
 // ===============================
-// Static Files
+// STATIC FILES
 // ===============================
 
 app.use(
@@ -52,84 +70,81 @@ app.use(
   express.static(path.join(__dirname, "uploads"))
 );
 
-
 // ===============================
-// Rate Limiting
+// RATE LIMIT
 // ===============================
 
-const limiter = rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-app.use("/api", limiter);
-
+app.use("/api", apiLimiter);
 
 // ===============================
-// Test Route
+// HEALTH CHECK
 // ===============================
 
 app.get("/", (req, res) => {
-  res.json({
+  res.status(200).json({
+    success: true,
     message: "SmartHire API is running",
   });
 });
 
-
 // ===============================
-// API Routes
+// API ROUTES
 // ===============================
 
 app.use("/api/auth", authRoutes);
-
 app.use("/api/jobs", jobRoutes);
-
 app.use("/api/applicants", applicantRoutes);
-
 app.use("/api/dashboard", dashboardRoutes);
-
 app.use("/api/users", userRoutes);
 
+// ===============================
+// 404 HANDLER
+// ===============================
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "API route not found",
+    path: req.originalUrl,
+  });
+});
 
 // ===============================
-// Error Handler
+// ERROR HANDLER
 // ===============================
 
 app.use((err, req, res, next) => {
-  console.error(err);
+  console.error("Server Error:", err.message);
 
-  if (err.name === "ValidationError") {
-    return res.status(400).json({
-      message: Object.values(err.errors)
-        .map((e) => e.message)
-        .join(", "),
-    });
-  }
-
-  if (err.code === 11000) {
-    return res.status(409).json({
-      message: "A record with this value already exists.",
-    });
-  }
-
-  if (err.name === "MulterError") {
-    return res.status(400).json({
+  if (err.message && err.message.startsWith("CORS blocked")) {
+    return res.status(403).json({
+      success: false,
       message: err.message,
     });
   }
 
-  res.status(err.statusCode || 500).json({
-    message: err.message || "Server error",
+  res.status(500).json({
+    success: false,
+    message: "Internal server error",
   });
 });
 
+// ===============================
+// START SERVER
+// ===============================
 
-// ===============================
-// Start Server
-// ===============================
+// IMPORTANT FOR RENDER:
+// Use Render's PORT, not a fixed port.
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`SmartHire API running on port ${PORT}`);
 });
