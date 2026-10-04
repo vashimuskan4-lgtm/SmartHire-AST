@@ -177,11 +177,19 @@ app.get("/api/health", (req, res) => {
 // API ROUTES
 // ===============================
 
+// Standard /api prefixed routes
 app.use("/api/auth", authRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/applicants", applicantRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/users", userRoutes);
+
+// Fallback direct routes (in case frontend VITE_API_URL omits /api)
+app.use("/auth", authRoutes);
+app.use("/jobs", jobRoutes);
+app.use("/applicants", applicantRoutes);
+app.use("/dashboard", dashboardRoutes);
+app.use("/users", userRoutes);
 
 // ===============================
 // 404 HANDLER
